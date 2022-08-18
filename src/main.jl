@@ -1,6 +1,7 @@
 using DrWatson
 @quickactivate "Swarm" 
 
+
 window_size = 60
 
 using Flux, CSV, DataFrames, MLDataPattern, StatsBase, LegolasFlux, InterProcessCommunication, DataStructures, MultivariateStats,JLD, Sockets, OpenSoundControl
@@ -41,7 +42,7 @@ function load_model()
         # 60x900xb
     )
     model = Chain(encoder, decoder)
-    model_row = read_model_row(datadir("1d_300_model-112-8.0e-6.arrow"))
+    model_row = read_model_row(projectdir("models","1d_300_model-116-8.0e-5.arrow"))
     load_weights!(model, model_row.weights)
     return model
 end
@@ -89,7 +90,9 @@ mutex = open_mutex("/mutex_lock")
 buffer = CircularBuffer{Array{Float32}}(window_size)   # A circular buffer of the last $window_size frames
 
 
+
 saved_model = load_pca_model()
+saved_model = PCA_model
 
 #main loop - try to sync to 30fps like the simulation
 
@@ -101,6 +104,8 @@ end
 
 sock1 = UDPSocket()
 
+datas = Matrix{Float32}[]
+
 function do_stuff(timer::Timer)
     load_new_data!(shared_array)
     if isfull(buffer)
@@ -109,23 +114,51 @@ function do_stuff(timer::Timer)
         encoding = encoder(i)
         # PCA that shit
         pca_data = MultivariateStats.transform(saved_model, encoding)
-        msg1 = OpenSoundControl.message("/flock", "ffffff", pca_data...)
+        msg1 = OpenSoundControl.message("/flock/pca", "ffffffffff", pca_data...)
         println(pca_data)
+        push!(datas,pca_data)
         send(sock1,ip"127.0.0.1", 8000, msg1.data)
+        send(sock1,ip"127.0.0.1", 12345, msg1.data)
     end
 end
 
-for i in 1:60
-    load_new_data!(shared_array)
-end
+datas
+
+
+map(bitstring,buffer[1])
 
 t = Timer(do_stuff, 0, interval=0.01)
 
+
 close(t)
+vcat(buffer...)
 
 
+ApEn(vcat(buffer...))
 
+axes(datas)
+
+axes(datas[1])
+z = hcat(datas...)
+
+for i in eachcol(z)
+    msg1 = OpenSoundControl.message("/flock/pca", "ffffffffff", i...)
+    println(msg1.data)
+    send(sock1,ip"127.0.0.1", 8000, msg1.data)
+    sleep(0.4)
+end
+
+
+for i in 1:10
+    @show i
+    println(maximum(z[i,:]))
+    println(minimum(z[i,:]))
+end
+
+show(datas[1])
 do_stuff(Timer(1.0))
+
+
 
 x = buffer.buffer
 

@@ -1,9 +1,28 @@
-df = DataFrame(CSV.File(datadir("exp_raw/data_3.csv"); header=false, types=Float32))
-normalised = Array(df) |> normalise
+df = DataFrame(CSV.File(datadir("exp_raw/data_static.csv"); header=false, types=Float32))
+delete!(df, 781)
+df2 = DataFrame(CSV.File(datadir("exp_raw/data_wind.csv"); header=false, types=Float32));
+df3 = DataFrame(CSV.File(datadir("exp_raw/data_forces.csv"); header=false, types=Float32));
+
+
+function normalise(M) 
+    min = minimum(minimum(eachcol(M)))
+    max = maximum(maximum(eachcol(M)))
+    return (M .- min) ./ (max - min)
+end
 
 window_size = 60
+
+
+normalised = Array(df) |> normalise
 data = slidingwindow(normalised',window_size,stride=1)
-train, test = splitobs(data, 0.7);
+normalised = Array(df2) |> normalise
+data2 = slidingwindow(normalised',window_size,stride=1)
+normalised = Array(df3) |> normalise
+data3 = slidingwindow(normalised',window_size,stride=1)
+
+all_data = vcat([data, data2, data3]...)
+
+train, test = splitobs(shuffleobs(all_data), 0.7);
 
 # lets train PCA and save to file
 train_encoded = Matrix{Float32}[]
