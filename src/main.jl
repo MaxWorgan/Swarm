@@ -69,7 +69,6 @@ function open_mutex(id)
     IPC.Mutex(m,0;shared=true)
 end
 
-
 function get_new_data(shared_array)
     copied_array = Array{Float32}(undef, 300,3)
     lock(mutex)
