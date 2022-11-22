@@ -69,7 +69,6 @@ function open_mutex(id)
     IPC.Mutex(m,0;shared=true)
 end
 
-
 function get_new_data(shared_array)
     copied_array = Array{Float32}(undef, 300,3)
     lock(mutex)
@@ -84,84 +83,57 @@ function load_new_data!(shared_array)
     push!(buffer,d)
 end
 
-encoder = load_model()[1]
-shared_array = open_shared_data("/position_data")
-mutex = open_mutex("/mutex_lock")
-buffer = CircularBuffer{Array{Float32}}(window_size)   # A circular buffer of the last $window_size frames
-
-
-
-saved_model = load_pca_model()
-saved_model = PCA_model
-
-#main loop - try to sync to 30fps like the simulation
-
 function normalise(M) 
     min = minimum(minimum(eachcol(M)))
     max = maximum(maximum(eachcol(M)))
     return (M .- min) ./ (max - min)
 end
 
-sock1 = UDPSocket()
+function load_pca_model()
+    pca_data = load(projectdir("models", "PCA_data_10_dims.jld"))
+    PCA{Float32}(pca_data["mean"],pca_data["proj"],pca_data["prinvars"],pca_data["tprinvar"],pca_data["tvar"])
+end
 
+
+model = load_model()
+encoder = model[1] |> gpu
+decoder = model[2] |> gpu
+shared_array = open_shared_data("/position_data")
+mutex = open_mutex("/mutex_lock")
+buffer = CircularBuffer{Array{Float32}}(window_size)   # A circular buffer of the last $window_size frames
+saved_model = load_pca_model()
+
+#main loop - try to sync to 30fps like the simulation
+sock1 = UDPSocket()
 datas = Matrix{Float32}[]
 
 function do_stuff(timer::Timer)
     load_new_data!(shared_array)
     if isfull(buffer)
         # create an encoding of the sliding window 
-        i = Flux.unsqueeze(reshape(vcat(buffer...), (60,900)), 3)
+        i = Flux.unsqueeze(reshape(vcat(buffer...), (60,900)), 3) |> gpu
         encoding = encoder(i)
+        loss = Flux.Losses.mse(decoder(encoding), i)
+        # println(loss)
         # PCA that shit
-        pca_data = MultivariateStats.transform(saved_model, encoding)
+        pca_data = MultivariateStats.transform(saved_model, encoding |> cpu)
         msg1 = OpenSoundControl.message("/flock/pca", "ffffffffff", pca_data...)
-        println(pca_data)
         push!(datas,pca_data)
-        send(sock1,ip"127.0.0.1", 8000, msg1.data)
         send(sock1,ip"127.0.0.1", 12345, msg1.data)
+        send(sock1,ip"10.10.10.10", 12345, msg1.data)
     end
 end
 
-datas
-
-
-map(bitstring,buffer[1])
-
-t = Timer(do_stuff, 0, interval=0.01)
-
-
-close(t)
-vcat(buffer...)
-
-
-ApEn(vcat(buffer...))
-
-axes(datas)
-
-axes(datas[1])
-z = hcat(datas...)
-
-for i in eachcol(z)
-    msg1 = OpenSoundControl.message("/flock/pca", "ffffffffff", i...)
-    println(msg1.data)
-    send(sock1,ip"127.0.0.1", 8000, msg1.data)
-    sleep(0.4)
-end
-
-
-for i in 1:10
-    @show i
-    println(maximum(z[i,:]))
-    println(minimum(z[i,:]))
-end
-
-show(datas[1])
-do_stuff(Timer(1.0))
+timer = Timer(do_stuff, 0, interval=1.0/30.0)
 
 
 
-x = buffer.buffer
 
-i = Flux.unsqueeze(reshape(vcat(x...), (60,900)),3)
-
-@time encoder(i)
+#close(timer)
+#z = hcat(datas...)
+#
+#for i in 1:10
+#    @show i
+#    println(maximum(z[i,:]))
+#    println(minimum(z[i,:]))
+#end
