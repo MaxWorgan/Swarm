@@ -67,19 +67,21 @@ function create_vae()
         MaxPool((3,)),
         Conv((3,),750 => 250, relu; pad = SamePad()),
         Conv((3,),250 => 25, relu; pad = SamePad()),
+        Conv((3,),25 => 10, relu; pad = SamePad()),
         # 5x25xb
         Flux.flatten,
-        Dense(125,25,relu)
+        Dense(50,10,relu)
       )
       
-    encoder_μ      = Chain(encoder_features, Dense(25, 25)) 
+    encoder_μ      = Chain(encoder_features, Dense(10,10)) 
       
-    encoder_logvar = Chain(encoder_features, Dense(25, 25)) 
+    encoder_logvar = Chain(encoder_features, Dense(10,10)) 
     
     decoder = Chain(
-        Dense(25,125,relu),
-        (x -> reshape(x, 5,25,:)),
+        Dense(10,50,relu),
+        (x -> reshape(x, 5,10,:)),
           # 5x100xb
+        ConvTranspose((3,), 10  => 25, relu; pad = SamePad()),
         ConvTranspose((3,), 25  => 250, relu; pad = SamePad()),
         ConvTranspose((3,), 250 => 750, relu; pad = SamePad()),
         Upsample((3,)),
