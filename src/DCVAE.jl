@@ -4,7 +4,7 @@ using Flux.Data: DataLoader
 using Flux, DataFrames, StatsBase,MLDataPattern, CUDA, PlotlyJS, LegolasFlux, CSV
 using Wandb, Dates,Logging
 
-# Start a new run, tracking hyperparameters in config
+## Start a new run, tracking hyperparameters in config
 logger = WandbLogger(
    project = "Swarm-VAE",
    name = "swarm-vae-training-$(now())",
@@ -55,58 +55,60 @@ end
 function create_vae()
     
     encoder_features = Chain(
-        # 60x900xb
-        Conv((9,), 900 => 9000, relu; pad = SamePad()),
+        # 60x300xb
+        Conv((9,), 300 => 3000, relu; pad = SamePad()),
         MaxPool((2,)),
-        # 30x9000xb
-        Conv((5,), 9000 => 4500, relu; pad = SamePad()),
+        # 30x3000xb
+        Conv((5,), 3000 => 1500, relu; pad = SamePad()),
         MaxPool((2,)),
         # 15x4500xb
-        Conv((5,),4500 => 2250, relu; pad = SamePad()),
+        Conv((5,),1500 => 750, relu; pad = SamePad()),
         # 15x2250xb
         MaxPool((3,)),
-        Conv((3,),2250 => 1000, relu; pad = SamePad()),
-        Conv((3,),1000 => 100, relu; pad = SamePad()),
-        # 5x100xb
+        Conv((3,),750 => 250, relu; pad = SamePad()),
+        Conv((3,),250 => 25, relu; pad = SamePad()),
+        Conv((3,),25 => 10, relu; pad = SamePad()),
+        # 5x25xb
         Flux.flatten,
-        Dense(500,100,relu)
+        Dense(50,10,relu)
       )
       
-    encoder_μ      = Chain(encoder_features, Dense(100, 100)) 
+    encoder_μ      = Chain(encoder_features, Dense(10,10)) 
       
-    encoder_logvar = Chain(encoder_features, Dense(100, 100)) 
+    encoder_logvar = Chain(encoder_features, Dense(10,10)) 
     
     decoder = Chain(
-        Dense(100,500,relu),
-        (x -> reshape(x, 5,100,:)),
+        Dense(10,50,relu),
+        (x -> reshape(x, 5,10,:)),
           # 5x100xb
-        ConvTranspose((3,), 100  => 1000, relu; pad = SamePad()),
-        ConvTranspose((3,), 1000 => 2250, relu; pad = SamePad()),
+        ConvTranspose((3,), 10  => 25, relu; pad = SamePad()),
+        ConvTranspose((3,), 25  => 250, relu; pad = SamePad()),
+        ConvTranspose((3,), 250 => 750, relu; pad = SamePad()),
         Upsample((3,)),
         # 15x2250xb
-        ConvTranspose((5,), 2250 => 4500, relu; pad = SamePad()),
+        ConvTranspose((5,), 750 => 1500 , relu; pad = SamePad()),
         Upsample((2,)),
         # 30x4500xb
-        ConvTranspose((5,), 4500 => 9000, relu; pad = SamePad()),
+        ConvTranspose((5,), 1500 => 3000, relu; pad = SamePad()),
         Upsample((2,)),
         # 60x9000xb
-        ConvTranspose((9,), 9000 => 900; pad = SamePad()),
+        ConvTranspose((9,), 3000 => 300; pad = SamePad()),
         # 60x900xb
       )
       return (encoder_μ, encoder_logvar, decoder)
       
   end
 
-  function save_model(m, epoch, loss)
+function save_model(m, epoch, loss)
     model_row = LegolasFlux.ModelRow(; weights = fetch_weights(cpu(m)),architecture_version=1, loss=loss)
-    write_model_row("1d_300_model-vae-$epoch-$loss.arrow", model_row)
+    write_model_row("1d_100_model-vae-$epoch-$loss.arrow", model_row)
 end
 
 function rearrange_1D(x)
     permutedims(cat(x..., dims=3), [2,1,3])
 end
 
-function train!(encoder_μ, encoder_logvar, decoder, train, validate, optimiser; num_epochs=100, bs=16, dev=Flux.gpu)
+function train!(encoder_μ, encoder_logvar, decoder, train, validate, optimiser; num_epochs=100, dev=Flux.gpu)
     # The training loop for the model
     trainable_params = Flux.params(encoder_μ, encoder_logvar, decoder)
     local train_loss_acc
@@ -116,48 +118,45 @@ function train!(encoder_μ, encoder_logvar, decoder, train, validate, optimiser;
     local improvement_thresh = 5.0
     validate_losses = Vector{Float64}()
     for e = 1:num_epochs
-
         train_loss_acc = 0.0
-        for x in eachbatch(train, size=bs)
-            x = rearrange_1D(x) |> dev
+        for x in train
+            x = x |> gpu
+            #x = rearrange_1D(x) |> dev
             # pullback function returns the result (loss) and a pullback operator (back)
             loss, back = Flux.pullback(trainable_params) do
                 vae_loss(encoder_μ, encoder_logvar, decoder, x)
             end
-            x |> cpu
             @info "metrics" train_loss=loss
             train_loss_acc += loss
             # Feed the pullback 1 to obtain the gradients and update the model parameters
             gradients = back(1f0)
             Flux.Optimise.update!(optimiser, trainable_params, gradients)
-            
         end
         validate_loss_acc = 0.0
-        for y in eachbatch(validate, size=bs)
-            y  = rearrange_1D(y) |> dev
+        for y in validate
+            y = y |> gpu
             validate_loss = vae_loss(encoder_μ, encoder_logvar, decoder, y)
-            y |> cpu
             @info "metrics" validate_loss=validate_loss
             validate_loss_acc += validate_loss
         end
-        validate_loss_acc = round(validate_loss_acc / (length(validate)/bs); digits=6)
-        train_loss_acc = round(train_loss_acc / (length(train)/bs) ;digits=6)
-        if abs(validate_loss_acc) < 2e+6 
-            if abs(validate_loss_acc) < prev_best_loss
-                @info "new best accuracy $validate_loss_acc saving model..."
-                save_model(cpu(Chain(encoder_μ, encoder_logvar, decoder)), e, validate_loss_acc)
-                last_improvement = e
-                prev_best_loss = validate_loss_acc
-            elseif (e - last_improvement) >= improvement_thresh && optimiser.eta > 1e-5
-                @info "Not improved in $improvement_thresh epochs. Dropping learning rate to $(opt.eta / 2.0)"
-                opt.eta /= 2.0
-                last_improvement = e # give it some time to improve
-                improvement_thresh = improvement_thresh * 1.5
-            elseif (e - last_improvement) >= 15
-                @info "Not improved in 15 epochs. Converged I guess"
-                break
-            end
-        end
+        validate_loss_acc = round(validate_loss_acc / (length(validate)/validate.batchsize); digits=6)
+        train_loss_acc = round(train_loss_acc / (length(train)/train.batchsize) ;digits=6)
+        # if abs(validate_loss_acc) < 2e+6 
+        #     if abs(validate_loss_acc) < prev_best_loss
+        #         @info "new best accuracy $validate_loss_acc saving model..."
+        #         save_model(cpu(Chain(encoder_μ, encoder_logvar, decoder)), e, validate_loss_acc)
+        #         last_improvement = e
+        #         prev_best_loss = validate_loss_acc
+        #     elseif (e - last_improvement) >= improvement_thresh && optimiser.eta > 1e-5
+        #         @info "Not improved in $improvement_thresh epochs. Dropping learning rate to $(opt.eta / 2.0)"
+        #         opt.eta /= 2.0
+        #         last_improvement = e # give it some time to improve
+        #         improvement_thresh = improvement_thresh * 1.5
+        #     elseif (e - last_improvement) >= 15
+        #         @info "Not improved in 15 epochs. Converged I guess"
+        #         break
+        #     end
+        # end
         push!(validate_losses, validate_loss_acc)
         println("Epoch $e/$num_epochs\t train loss: $train_loss_acc\t validate loss: $validate_loss_acc")
     end        
@@ -173,25 +172,38 @@ function normalise(M)
 end
 
 
+function load_data(file_path, window_size)
+    
+    df           = DataFrame(CSV.File(file_path; header=false, types=Float32));
+    normalised   = Array(df) |> normalise
+    data         = slidingwindow(normalised',window_size,stride=1)
+
+    ts, vs       = splitobs(shuffleobs(data), 0.7)
+    ts_length    = length(ts)
+    vs_length    = length(vs)
+
+    train_set    = permutedims(reshape(reduce(hcat, ts), (300,window_size,ts_length)), (2,1,3))
+    validate_set = permutedims(reshape(reduce(hcat, vs), (300,window_size,vs_length)), (2,1,3))
+
+    train_loader    = DataLoader(train_set;batchsize=48,shuffle=true)
+    validate_loader = DataLoader(validate_set; batchsize=48, shuffle=true)
+    (train_loader, validate_loader)
+
+end
+
+
+
 window_size = 60
 
-num_epochs = 100
+(train_loader, validate_loader) = load_data("$(datadir())/exp_raw/data_large.csv", window_size)
 
-
-
-#load the data
-df = DataFrame(CSV.File("data_test.csv"; header=false, types=Float32));
-
-normalised = Array(df) |> normalise
-
-data = slidingwindow(normalised',window_size,stride=1)
-
-train_set, validate_set = splitobs(shuffleobs(data), 0.7);
+num_epochs  = 250
 
 encoder_μ, encoder_logvar, decoder = create_vae() |> gpu
 
+train!(encoder_μ, encoder_logvar, decoder, train_loader, validate_loader, Flux.Optimise.ADAM(get_config(logger, "η")), num_epochs=num_epochs)
 
 
-train!(encoder_μ, encoder_logvar, decoder, train_set, validate_set, Flux.Optimise.ADAM(get_config(logger, "η")), num_epochs=num_epochs, bs=get_config(logger, "batch_size"))
+#train!(encoder_μ, encoder_logvar, decoder, train_set, validate_set, Flux.Optimise.ADAM(get_config(logger, "η")), num_epochs=num_epochs, bs=get_config(logger, "batch_size"))
 
 close(logger)
