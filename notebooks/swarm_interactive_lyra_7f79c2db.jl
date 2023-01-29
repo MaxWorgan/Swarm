@@ -27,18 +27,22 @@ using MultivariateStats
 # ╔═╡ aff912c8-e62b-4078-aec9-2f58454d6559
 
 function create_vae()
-    
-   encoder_features = Chain(
+      encoder_features = Chain(
 
-        Conv((10,3), 100 => 1000, relu; pad = SamePad(), stride=(2,1)),
-        Conv((5,3), 1000 => 500, relu; pad = SamePad(), stride=(2,1)),
-        Conv((5,3),500 => 250, relu; pad = SamePad(), stride=(3,1)),
-        Conv((5,3),250 => 100, relu; pad = SamePad()),
+        #60x3x100xb
+        Conv((10,3), 100 => 1000, relu; pad = (5,4,0,0)),
+        #60x1x1000xb
+        Conv((10,1), 1000 => 500, relu; pad = SamePad(), stride=(2,1)),
+        #30x1x500xb
+        Conv((5,1),500 => 250, relu; pad = SamePad(), stride=(3,1)),
+        #10x1x250xb
+        Conv((5,1),250 => 100, relu; pad = SamePad()),
+        #10x1x100xb
 
         Flux.flatten,
 
-        Dense(1500,150,relu),
-        Dense(150,10,relu)
+        Dense(1000,100,relu),
+        Dense(100,10,relu)
       )
 
     encoder_μ      = Chain(encoder_features, Dense(10,10))
@@ -46,15 +50,15 @@ function create_vae()
     encoder_logvar = Chain(encoder_features, Dense(10,10))
 
     decoder = Chain(
-        Dense(10,150,relu),
-        Dense(150,1500,relu),
+        Dense(10,100,relu),
+        Dense(100,1000,relu),
 
-        (x -> reshape(x, 5,3,100,:)),
+        (x -> reshape(x, 10,1,100,:)),
 
-        ConvTranspose((5,3), 100 => 250, relu; pad = SamePad()),
-        ConvTranspose((5,3), 250 => 500, relu; pad = SamePad(), stride=(3,1)),
-        ConvTranspose((5,3), 500 => 1000, relu; pad = SamePad(), stride=(2,1)),
-        ConvTranspose((10,3), 1000 => 100, relu; pad = SamePad(), stride=(2,1))
+        ConvTranspose((5,1), 100 => 250, relu; pad = SamePad()),
+        ConvTranspose((5,1), 250 => 500, relu; pad = SamePad(), stride=(3,1)),
+        ConvTranspose((10,1), 500 => 1000, relu; pad = SamePad(), stride=(2,1)),
+        ConvTranspose((10,3), 1000 => 100, relu; pad = (5,4,0,0))
 
       )
       return (encoder_μ, encoder_logvar, decoder)

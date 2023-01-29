@@ -12,8 +12,8 @@ end
 
 
 function save_model(name, m, epoch, loss)
-    model_row = LegolasFlux.ModelRow(; weights = fetch_weights(cpu(m)),architecture_version=1, loss=loss)
-    write_model_row("$name-$epoch-$loss.arrow", model_row)
+    model_row = LegolasFlux.ModelV1(; weights = fetch_weights(cpu(m)))
+    write_model_row("$name.arrow", model_row)
 end
 
 function rearrange_1D(x)
