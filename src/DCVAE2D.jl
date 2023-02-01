@@ -30,18 +30,21 @@ function create_vae()
     encoder_features = Chain(
 
         #60x3x100xb
-        Conv((10,3), 100 => 1000, relu; pad = (5,4,0,0)),
-        #60x1x1000xb
-        Conv((10,1), 1000 => 500, relu; pad = SamePad(), stride=(2,1)),
-        #30x1x500xb
-        Conv((5,1),500 => 250, relu; pad = SamePad(), stride=(3,1)),
-        #10x1x250xb
-        Conv((5,1),250 => 100, relu; pad = SamePad()),
-        #10x1x100xb
+        Conv((10,3), 100 => 1000, relu; pad = SamePad()),
+        #60x3x1000xb
+        Conv((10,3), 1000 => 750, relu; pad = SamePad(), stride=(2,1)),
+        #30x3x750xb
+        Conv((10,3), 750 => 500, relu; pad = SamePad(), stride=(2,1)),
+        #15x3x500xb
+        Conv((5,1), 500 => 250, relu; pad = SamePad(), stride=(3,1)),
+        #5x3x250xb
+        Conv((5,1), 250 => 100, relu; pad = SamePad()),
+        #5x3x100xb
+        Conv((5,1), 100 => 10, relu; pad = SamePad()),
+        #5x3x10xb
 
         Flux.flatten,
-
-        Dense(1000,100,relu),
+        Dense(150,100,relu),
         Dense(100,10,relu)
       )
       
@@ -51,14 +54,21 @@ function create_vae()
     
     decoder = Chain(
         Dense(10,100,relu),
-        Dense(100,1000,relu),
+        Dense(100,150,relu),
 
-        (x -> reshape(x, 10,1,100,:)),
-
+        (x -> reshape(x, 5, 3,10,:)),
+        #5x3x10xb
+        ConvTranspose((5,1), 10 => 100, relu; pad = SamePad()),
+        #5x3x100xb
         ConvTranspose((5,1), 100 => 250, relu; pad = SamePad()),
+        #5x3x250xb
         ConvTranspose((5,1), 250 => 500, relu; pad = SamePad(), stride=(3,1)),
-        ConvTranspose((10,1), 500 => 1000, relu; pad = SamePad(), stride=(2,1)),
-        ConvTranspose((10,3), 1000 => 100, relu; pad = (5,4,0,0))
+        #15x3x500xb
+        ConvTranspose((10,3), 500 => 750, relu; pad = SamePad(), stride=(2,1)),
+        #30x3x750xb
+        ConvTranspose((10,3), 750 => 1000, relu; pad = SamePad(), stride=(2,1)),
+        #60x3x1000xb
+        ConvTranspose((10,3), 1000 => 100; pad = SamePad()),
 
       )
       return (encoder_μ, encoder_logvar, decoder)
