@@ -3,13 +3,14 @@ quickactivate(@__DIR__)
 using Flux.Data: DataLoader
 using Flux, DataFrames, StatsBase,MLDataPattern, CUDA, PlotlyJS, LegolasFlux, CSV
 using Wandb, Dates,Logging
+using ReconcilingEmergences
+using ChainRulesCore
 
 function normalise(M) 
     min_m = minimum(M)
     max_m = maximum(M)
     return (M .- min_m) ./ (max_m - min_m)
 end
-
 
 function save_model(name, m, epoch, loss)
     model_row = LegolasFlux.ModelV1(; weights = fetch_weights(cpu(m)))
@@ -35,13 +36,13 @@ function reconstruction_loss(x̂, x)
     return rec
 end
 
-function vae_loss(encoder_μ, encoder_logvar, decoder, x)
+function vae_loss(encoder_μ, encoder_logvar, decoder, x; dev=gpu, ψ_bias=100)
     len = size(x)[end]
     @assert len != 0
     # Forward propagate through mean encoder and std encoders
     μ = encoder_μ(x)
     logσ = encoder_logvar(x)
-    z = μ + gpu(randn(Float32, size(logσ))) .* exp.(logσ)
+    z = μ + dev(randn(Float32, size(logσ))) .* exp.(logσ)
     # Reconstruct from latent sample
     x̂ = decoder(z)
     
@@ -49,8 +50,13 @@ function vae_loss(encoder_μ, encoder_logvar, decoder, x)
 
     rec = reconstruction_loss(x̂, x)
 
-    @info "metrics" reconstruction_loss=rec kl=kl
+    reshaped_input = permutedims(reshape(x,(18000,size(x,4))),(2,1)) 
+
+    (ψ, x_mi, v_mi) = @non_differentiable EmergencePsiGPU(reshaped_input,permutedims(z,(2,1)))
+    scaled_ψ = (1 - sigmoid(ψ)) * ψ_bias
+
+    @info "metrics" reconstruction_loss=rec kl=kl ψ=ψ scaled_ψ=scaled_ψ x_mi=x_mi v_mi=v_mi
     
-    return rec + kl
+    return rec + kl + scaled_ψ
  
 end
