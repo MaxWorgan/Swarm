@@ -30,22 +30,24 @@ function create_vae()
     #instead of 60x300x48 we will have 60x3x100x48
   
     encoder_features = Chain(
-        # 60x3x100xb
-        Conv((9,9), 100 => 1000, relu; pad = SamePad()),
-        MaxPool((2,1)),
-        # 30x3x1000xb
-        Conv((5,5), 1000 => 500, relu; pad = SamePad()),
-        MaxPool((2,1)),
-        # 15x3x500xb
-        Conv((5,5),500 => 250, relu; pad = SamePad()),
-        MaxPool((3,1)),
-        # 5x3x250xb
-        Conv((3,3),250 => 100, relu; pad = SamePad()),
-        Conv((2,2),100 => 50, relu; pad = SamePad()),
-        Conv((1,1),50 => 10, relu; pad = SamePad()),
-        # 5x3x10xb
+
+        #60x3x100xb
+        Conv((10,3), 100 => 1000, relu; pad = SamePad()),
+        #60x3x1000xb
+        Conv((10,3), 1000 => 750, relu; pad = SamePad(), stride=(2,1)),
+        #30x3x750xb
+        Conv((10,3), 750 => 500, relu; pad = SamePad(), stride=(2,1)),
+        #15x3x500xb
+        Conv((5,1), 500 => 250, relu; pad = SamePad(), stride=(3,1)),
+        #5x3x250xb
+        Conv((5,1), 250 => 100, relu; pad = SamePad()),
+        #5x3x100xb
+        Conv((5,1), 100 => 10, relu; pad = SamePad()),
+        #5x3x10xb
+
         Flux.flatten,
-        Dense(150,10,relu)
+        Dense(150,100,relu),
+        Dense(100,10,relu)
       )
       
     encoder_μ      = Chain(encoder_features, Dense(10,10)) 
@@ -53,23 +55,23 @@ function create_vae()
     encoder_logvar = Chain(encoder_features, Dense(10,10)) 
     
     decoder = Chain(
-        Dense(10,150,relu),
-        (x -> reshape(x, 5,3,10,:)),
-          # 5x3x10xb
-        ConvTranspose((1,1), 10 => 50, relu; pad = SamePad()),
-        ConvTranspose((2,2), 50 => 100, relu; pad = SamePad()),
-        ConvTranspose((3,3), 100 => 250, relu; pad = SamePad()),
-        # 5x3x250xb
-        Upsample((3,1)),
-        ConvTranspose((5,5), 250 => 500 , relu; pad = SamePad()),
-        # 15x3x500xb
-        Upsample((2,1)),
-        ConvTranspose((5,5), 500 => 1000, relu; pad = SamePad()),
-        # 30x3x1000xb
-        Upsample((2,1)),
-        # 60x3x1000xb
-        ConvTranspose((9,9), 1000 => 100; pad = SamePad()),
-        # 60x3x100xb
+        Dense(10,100,relu),
+        Dense(100,150,relu),
+
+        (x -> reshape(x, 5, 3,10,:)),
+        #5x3x10xb
+        ConvTranspose((5,1), 10 => 100, relu; pad = SamePad()),
+        #5x3x100xb
+        ConvTranspose((5,1), 100 => 250, relu; pad = SamePad()),
+        #5x3x250xb
+        ConvTranspose((5,1), 250 => 500, relu; pad = SamePad(), stride=(3,1)),
+        #15x3x500xb
+        ConvTranspose((10,3), 500 => 750, relu; pad = SamePad(), stride=(2,1)),
+        #30x3x750xb
+        ConvTranspose((10,3), 750 => 1000, relu; pad = SamePad(), stride=(2,1)),
+        #60x3x1000xb
+        ConvTranspose((10,3), 1000 => 100; pad = SamePad()),
+
       )
       return (encoder_μ, encoder_logvar, decoder)
       
@@ -124,7 +126,7 @@ end
 
 
 window_size = 60
-num_epochs = 1 
+num_epochs = 250
 
 (train_loader, validate_loader) = load_data("$(datadir())/exp_raw/data_large.csv", window_size)
 
