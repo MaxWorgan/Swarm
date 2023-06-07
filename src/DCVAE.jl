@@ -7,11 +7,11 @@ using Wandb, Dates,Logging
 ## Start a new run, tracking hyperparameters in config
 logger = WandbLogger(
    project = "Swarm-VAE",
-   name = "swarm-vae-training-$(now())",
+   name = "swarm-vae-training-ems-$(now())",
    config = Dict(
       "η" => 0.00001,
       "batch_size" => 48,
-      "data_set" => "data_test"
+      "data_set" => "data_large.csv"
    ),
 )
 
@@ -110,43 +110,28 @@ end
 
 function train!(encoder_μ, encoder_logvar, decoder, train, validate, optimiser; num_epochs=100, dev=Flux.gpu)
     # The training loop for the model
-    trainable_params = Flux.params(encoder_μ, encoder_logvar, decoder)
-    local train_loss_acc
-    local validate_loss, validate_loss_acc
-    local last_improvement = 0
-    local prev_best_loss = 0.01
-    local improvement_thresh = 5.0
-    validate_losses = Vector{Float64}()
     for e = 1:num_epochs
-        train_loss_acc = 0.0
         for x in train
-            x = x |> gpu
-            #x = rearrange_1D(x) |> dev
-            # pullback function returns the result (loss) and a pullback operator (back)
-            loss, back = Flux.pullback(trainable_params) do
-                vae_loss(encoder_μ, encoder_logvar, decoder, x)
+            x = x |> dev
+            loss, back = Flux.pullback(encoder_μ, encoder_logvar, decoder) do enc_μ, enc_logvar, dec
+                vae_loss(enc_μ, enc_logvar, dec, x;dev=dev)
             end
             @info "metrics" train_loss=loss
-            train_loss_acc += loss
+
             # Feed the pullback 1 to obtain the gradients and update the model parameters
-            gradients = back(1f0)
-            Flux.Optimise.update!(optimiser, trainable_params, gradients)
+            grad_enc_μ, grad_enc_logvar, grad_dec = back(1f0)
+
+            Flux.update!(opt_enc_μ, encoder_μ, grad_enc_μ)
+            Flux.update!(opt_enc_logvar, encoder_logvar, grad_enc_logvar)
+            Flux.update!(opt_dec, decoder, grad_dec)
         end
-        validate_loss_acc = 0.0
         for y in validate
             y = y |> gpu
             validate_loss = vae_loss(encoder_μ, encoder_logvar, decoder, y)
             @info "metrics" validate_loss=validate_loss
-            validate_loss_acc += validate_loss
         end
-        validate_loss_acc = round(validate_loss_acc / (length(validate)/validate.batchsize); digits=6)
-        train_loss_acc    = round(train_loss_acc / (length(train)/train.batchsize) ;digits=6)
-        push!(validate_losses, validate_loss_acc)
-        println("Epoch $e/$num_epochs\t train loss: $train_loss_acc\t validate loss: $validate_loss_acc")
     end        
-    @info "saving post training with validate_loss:  $validate_loss_acc"
     save_model(cpu(Chain(encoder_μ, encoder_logvar, decoder)), num_epochs, validate_loss_acc)
-
 end
 
 function normalise(M) 
@@ -176,8 +161,8 @@ function load_data(file_path, window_size)
     train_set    = permutedims(r_train, (2,1,3))
     validate_set = permutedims(reshape(reduce(hcat, vs), (300,window_size,vs_length)), (2,1,3))
 
-    train_loader    = DataLoader(mapslices(normalise,train_set; dims=3); batchsize=48,shuffle=true)
-    validate_loader = DataLoader(mapslices(normalise,validate_set; dims=3); batchsize=48, shuffle=true)
+    train_loader    = DataLoader(mapslices(normalise,train_set; dims=3); batchsize=get_config(logger,"batch_size"),shuffle=true)
+    validate_loader = DataLoader(mapslices(normalise,validate_set; dims=3); batchsize=get_config(logger, "batch_size"), shuffle=true)
     (train_loader, validate_loader)
 
 end
@@ -186,11 +171,18 @@ end
 
 window_size = 60
 
-(train_loader, validate_loader) = load_data("$(datadir())/exp_raw/data_large.csv", window_size)
+(train_loader, validate_loader) = load_data("$(datadir())/exp_raw/$(get_config(logger,"data_set"))", window_size)
 
 num_epochs  = 250
 
 encoder_μ, encoder_logvar, decoder = create_vae() |> gpu
+
+# ADAM optimizer
+η = get_config(logger, "η")
+opt = Adam(η)
+opt_enc_μ = Flux.setup(opt, encoder_μ)
+opt_enc_logvar = Flux.setup(opt, encoder_logvar)
+opt_dec = Flux.setup(opt, decoder)
 
 train!(encoder_μ, encoder_logvar, decoder, train_loader, validate_loader, Flux.Optimise.ADAM(get_config(logger, "η")), num_epochs=num_epochs)
 
