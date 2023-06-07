@@ -157,15 +157,23 @@ end
 
 
 function load_data(file_path, window_size)
-    
+    # ZZZx300 
     df           = DataFrame(CSV.File(file_path; header=false, types=Float32));
+    # 169650x(300x60)
     data         = slidingwindow(Array(df)',window_size,stride=1)
 
     ts, vs       = splitobs(shuffleobs(data), 0.7)
+    # 16965x(300x60)
     ts_length    = length(ts)
+    # 1696x(300x60)
     vs_length    = length(vs)
 
-    train_set    = permutedims(reshape(reduce(hcat, ts), (300,window_size,ts_length)), (2,1,3))
+    #300xZZZZZZ
+    r_red        = reduce(hcat, ts)    
+    #300, 60, ZZZZ
+    r_train      = reshape(r_red, (300,window_size,ts_length))
+    # 60, 300, ZZZZ
+    train_set    = permutedims(r_train, (2,1,3))
     validate_set = permutedims(reshape(reduce(hcat, vs), (300,window_size,vs_length)), (2,1,3))
 
     train_loader    = DataLoader(mapslices(normalise,train_set; dims=3); batchsize=48,shuffle=true)

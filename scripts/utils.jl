@@ -5,4 +5,3 @@ function normalise(M)
     max = maximum(maximum(eachcol(M)))
     return (M .- min) ./ (max - min)
 end
-
